@@ -23,7 +23,7 @@ class BasicTensorMethod(Optimizer):
     MONOTONE = True
 
     def __init__(self, params, L: float = 1., subsolver: Optimizer = None, max_iters_outer: int = 50,
-                 subsolver_args: dict = None, max_iters: int = None, steps_per_update=1, verbose: bool = True, testing: bool = False):
+                 subsolver_args: dict = None, max_iters: int = None, steps_per_update: int = 1, verbose: bool = True, testing: bool = False):
         if L <= 0:
             raise ValueError(f"Invalid learning rate: L = {L}")
 
