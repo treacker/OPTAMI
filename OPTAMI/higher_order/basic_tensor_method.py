@@ -23,7 +23,7 @@ class BasicTensorMethod(Optimizer):
     MONOTONE = True
 
     def __init__(self, params, L: float = 1., subsolver: Optimizer = None, max_iters_outer: int = 50,
-                 subsolver_args: dict = None, max_iters: int = None, verbose: bool = True, testing: bool = False):
+                 subsolver_args: dict = None, max_iters: int = None, steps_per_update=1, verbose: bool = True, testing: bool = False):
         if L <= 0:
             raise ValueError(f"Invalid learning rate: L = {L}")
 
@@ -32,6 +32,7 @@ class BasicTensorMethod(Optimizer):
             subsolver_args=subsolver_args or {'lr': 1e-2}, max_iters=max_iters))
         self.verbose = verbose
         self.testing = testing
+        self.steps_per_update = steps_per_update
 
     def _add_v(self, params, vector, alpha=1):
         with torch.no_grad():
@@ -71,9 +72,10 @@ class BasicTensorMethod(Optimizer):
                 full_hessian = derivatives.flat_hessian(df, list(params)).to(torch.double)
                 eigenvalues, eigenvectors = torch.linalg.eigh(full_hessian)
 
-            for _ in range(max_iters_outer):
-                D3xx, Hx = derivatives.third_derivative_vec(
-                    closure, list(params), v, flat=True)
+            for i in range(max_iters_outer):
+                if i % self.steps_per_update == 0:
+                    D3xx, Hx = derivatives.third_derivative_vec(
+                        closure, list(params), v, flat=True)
                 with torch.no_grad():
                     D3xx = D3xx.to(torch.double)
                     Hx = Hx.to(torch.double)
