@@ -22,19 +22,24 @@ class CubicRegularizedNewton(Optimizer):
 
     def __init__(self, params, L: float = 1., subsolver: Optimizer = None,
                  subsolver_args: dict = None, max_iters: int = 100,
-                 rel_acc: float = 1e-1, verbose: bool = True, testing: bool = False):
+                 rel_acc: float = 1e-1, verbose: bool = True, testing: bool = False,
+                 lazy_args: dict = dict(step_per_update=1)):
         if L <= 0:
             raise ValueError(f"Invalid learning rate: L = {L}")
+        
+        lazy_args['cur_iter'] = 0
+        lazy_args['cached_hess'] = 0
 
         super().__init__(params, dict(
             L=L, subsolver=subsolver,
             subsolver_args=subsolver_args or {'lr': 1e-2},
-            max_iters=max_iters, rel_acc=rel_acc))
+            max_iters=max_iters, rel_acc=rel_acc, lazy_args=lazy_args))
 
         self.verbose = verbose
         self.testing = testing
+        self.hess = None
 
-    def step(self, closure):
+    def step(self, closure, hess=True):
         """Performs a single optimization step.
         Arguments:
             closure (callable): a closure that reevaluates the model and returns the loss
@@ -48,9 +53,14 @@ class CubicRegularizedNewton(Optimizer):
             max_iters = group['max_iters']
             subsolver = group['subsolver']
             subsolver_args = group['subsolver_args']
-
+            
+            if not hess:
+                precalc = self.cached_hess
+            else:
+                precalc = None
+            
             if subsolver is None:
-                x = exact(params, closure, L, testing=self.testing)
+                x, self.cached_hess = exact(params, closure, L, precalc, testing=self.testing)
             else:
                 is_satisfactory, x = iterative(
                     params, closure, L,
@@ -62,13 +72,20 @@ class CubicRegularizedNewton(Optimizer):
             with torch.no_grad():
                 for i, p in enumerate(params):
                     p.add_(x[i])
+            
+            group['lazy_args']['cur_iter'] += 1
+            
         return None
 
 
-def exact(params, closure, L, delta=1e-8, testing=False):
+def exact(params, closure, L, hess=None, delta=1e-8, testing=False):
     df = tuple_to_vec.tuple_to_vector(
         torch.autograd.grad(closure(), list(params), create_graph=True))
-    H = derivatives.flat_hessian(df, list(params))
+    
+    if hess is not None:
+        H = hess
+    else:
+        H = derivatives.flat_hessian(df, list(params)).to(torch.double)
 
     c = df.detach().to(torch.double)
     A = H.detach().to(torch.double)
@@ -97,8 +114,8 @@ def exact(params, closure, L, delta=1e-8, testing=False):
 
     tau_best = line_search.ray_line_search(
         dual,
-        left_point=torch.tensor([0.]),
-        middle_point=torch.tensor([2.]),
+        left_point=torch.tensor([0.], device=T.device),
+        middle_point=torch.tensor([2.], device=T.device),
         delta=delta)
 
     invert = inv(T, L, tau_best)
@@ -107,7 +124,7 @@ def exact(params, closure, L, delta=1e-8, testing=False):
     if testing and (c + L / 2 * x.norm() * x + A.mv(x)).abs().max().item() >= 0.01:
         raise ValueError('obtained `x` is not optimal')
 
-    return tuple_to_vec.rollup_vector(x, list(params))
+    return tuple_to_vec.rollup_vector(x, list(params)), H
 
 
 def iterative(params, closure, L, subsolver, subsolver_args, max_iters, rel_acc):
